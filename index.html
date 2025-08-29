@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Intense Shooter</title>
+        <style>
+            html, body {
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+                background: #111;
+                color: white;
+                font-family: sans-serif;
+            }
+            canvas {
+                display: block;
+                position: absolute;
+                background: #222;
+                z-index: 0;
+            }
+            #hud {
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                font-size: 18px;
+                z-index: 10;
+            }
+            #gameOverScreen {
+                display: none;
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                font-size: 32px;
+                background: rgba(0, 0, 0, 0.9);
+                padding: 20px;
+                border: 2px solid white;
+                text-align: center;
+                z-index: 20;
+            }
+            #restartBtn {
+                margin-top: 15px;
+                padding: 10px 20px;
+                font-size: 18px;
+                cursor: pointer;
+                background: white;
+                color: black;
+                border: none;
+                z-index: 30;
+            }
+            #credit {
+                position: absolute;
+                bottom: 10px;
+                left: 10px;
+                color: white;
+                font-family: sans-serif;
+                background: rgba(0, 0, 0, 0.5);
+                padding: 5px 10px;
+                border-radius: 5px;
+                z-index: 10000;
+            }
+        </style>
+        
+        <!-- Firebase SDK -->
+        <script type="module">
+            import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
+            import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-analytics.js";
+            import { getDatabase, ref, set, get } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-database.js";
+            
+            const firebaseConfig = {
+                apiKey: "AIzaSyAOalc9uzsoMXsGTjbwyLvR4ip7HYpfHbU",
+                authDomain: "intense-shooter-data.firebaseapp.com",
+                databaseURL: "https://intense-shooter-data-default-rtdb.asia-southeast1.firebasedatabase.app",
+                projectId: "intense-shooter-data",
+                storageBucket: "intense-shooter-data.firebasestorage.app",
+                messagingSenderId: "912593552501",
+                appId: "1:912593552501:web:beef05dd0e528dc295a43c",
+                measurementId: "G-TYGHFCBY31"
+            };
+            
+            const app = initializeApp(firebaseConfig);
+            const analytics = getAnalytics(app);
+            const database = getDatabase(app);
+            
+            // Make database and its related functions globally accessible
+            window.firebaseDatabase = getDatabase(app);
+            window.database = database;
+            window.ref = ref;
+            window.set = set;
+            window.get = get;
+        </script>
+        <script>
+            window.addEventListener('load', () => {
+                fetchHighScore(); // Get the current global high score at page load
+            });
+        </script>
+    </head>
+    <body>
+        <p id="credit">
+        V5.3
+        </p>
+        
+        <div id="hud">
+            <div id="score">Score: 0</div>
+            <div id="highScore">High Score: 0</div>
+            <div id="globalHighScore">All time high: 0</div>
+            <div id="health">Health: 100</div>
+        </div>
+        <div id="gameOverScreen">
+            Game Over!<br />
+            Final Score: <span id="finalScore"></span><br />
+            <button id="restartBtn">Restart</button>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        
+        <script>
+            const canvas = document.getElementById("gameCanvas");
+            const ctx = canvas.getContext("2d");
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            const keys = {};
+            let mouseX = 0, mouseY = 0;
+            let score = 0;
+            let highScore = localStorage.getItem('highScore') || 0;
+            let globalHighScore = 0;
+            let health = 100;
+            let gameOver = false;
+            
+            let damageFlashTimer = 0;
+            let shakeTime = 0;
+            let shakeIntensity = 15;
+            
+            document.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+            document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+            document.addEventListener("mousemove", e => {
+                mouseX = e.clientX;
+                mouseY = e.clientY;
+            });
+            document.addEventListener("click", () => {
+                if (!gameOver) shootBullet();
+            });
+            
+            function fetchHighScore() {
+                const highScoreRef = ref(database, 'highScore');
+                get(highScoreRef)
+                .then(snapshot => {
+                    if (snapshot.exists()) {
+                        globalHighScore = snapshot.val();
+                        document.getElementById('globalHighScore').textContent = `Global High Score: ${globalHighScore}`;
+                    } else {
+                        console.log("No global high score yet");
+                    }
+                })
+                .catch(error => {
+                    console.error("Error fetching global high score:", error);
+                });
+            }
+            function updateGlobalHighScore(newScore) {
+                console.log("Checking to update global high score...");
+                console.log("Current newScore:", newScore, "Current globalHighScore:", globalHighScore);
+                
+                if (newScore > globalHighScore) {
+                    console.log("Condition met: New score is greater. Attempting to write to database.");
+                    const highScoreRef = ref(database, 'highScore');
+                    set(highScoreRef, newScore)
+                    .then(() => {
+                        globalHighScore = newScore;
+                        document.getElementById('globalHighScore').textContent = `Global High Score: ${globalHighScore}`;
+                        console.log("SUCCESS: Updated global high score in Firebase:", newScore);
+                    })
+                    .catch(error => {
+                        console.error("ERROR: Failed to update global high score in Firebase:", error);
+                    });
+                } else {
+                    console.log("Condition NOT met: New score is not greater than global high score. No update performed.");
+                }
+            }
+             
+            class Player {
+                constructor() {
+                    this.x = canvas.width / 2;
+                    this.y = canvas.height / 2;
+                    this.size = 20;
+                    this.speed = 4;
+                }
+                update() {
+                    if (keys["w"]) this.y -= this.speed;
+                    if (keys["s"]) this.y += this.speed;
+                    if (keys["a"]) this.x -= this.speed;
+                    if (keys["d"]) this.x += this.speed;
+                    this.x = Math.max(0, Math.min(canvas.width, this.x));
+                    this.y = Math.max(0, Math.min(canvas.height, this.y));
+                }
+                draw() {
+                    ctx.fillStyle = damageFlashTimer > 0 ? "red" : "#0f0";
+                    ctx.fillStyle = "#0f0";
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            class Bullet {
+                constructor(x, y, angle) {
+                    this.x = x;
+                    this.y = y;
+                    this.angle = angle;
+                    this.speed = 8;
+                    this.size = 5;
+                }
+                update() {
+                    this.x += Math.cos(this.angle) * this.speed;
+                    this.y += Math.sin(this.angle) * this.speed;
+                }
+                draw() {
+                    ctx.fillStyle = "yellow";
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            class Enemy {
+                constructor() {
+                    const edge = Math.floor(Math.random() * 4);
+                    if (edge === 0) {
+                        this.x = Math.random() * canvas.width;
+                        this.y = -20;
+                    } else if (edge === 1) {
+                        this.x = Math.random() * canvas.width;
+                        this.y = canvas.height + 20;
+                    } else if (edge === 2) {
+                        this.x = -20;
+                        this.y = Math.random() * canvas.height;
+                    } else {
+                        this.x = canvas.width + 20;
+                        this.y = Math.random() * canvas.height;
+                    }
+                    this.size = Math.random() * 30 + 12;
+                    this.speed = 1 + score * 0.002 + Math.random() * 5;
+                }
+                update() {
+                    const dx = player.x - this.x;
+                    const dy = player.y - this.y;
+                    const dist = Math.hypot(dx, dy);
+                    this.x += (dx / dist) * this.speed;
+                    this.y += (dy / dist) * this.speed;
+                }
+                draw() {
+                    ctx.fillStyle = "red";
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            class ShooterEnemy {
+                constructor() {
+                    const edge = Math.floor(Math.random() * 4);
+                    if (edge === 0) {
+                        this.x = Math.random() * canvas.width;
+                        this.y = -20;
+                    } else if (edge === 1) {
+                        this.x = Math.random() * canvas.width;
+                        this.y = canvas.height + 20;
+                    } else if (edge === 2) {
+                        this.x = -20;
+                        this.y = Math.random() * canvas.height;
+                    } else {
+                        this.x = canvas.width + 20;
+                        this.y = Math.random() * canvas.height;
+                    }
+                    this.size = 40;
+                    this.speed = 1.5;
+                    this.shootDelay = 800;
+                    this.angle = 0;
+                    this.lastShot = Date.now();
+                }
+                
+                update() {
+                    const dx = player.x - this.x;
+                    const dy = player.y - this.y;
+                    const dist = Math.hypot(dx, dy);
+                    this.angle = Math.atan2(dy, dx);
+                    
+                    if (dist > 150) {
+                        this.x += (dx / dist) * this.speed;
+                        this.y += (dy / dist) * this.speed;
+                    }
+                    
+                    const now = Date.now();
+                    if (now - this.lastShot > this.shootDelay) {
+                        this.lastShot = now;
+                        shooterProjectiles.push(new ShooterProjectile(this.x, this.y, this.angle));
+                    }
+                }
+                
+                draw() {
+                    ctx.save();
+                    ctx.translate(this.x, this.y);
+                    ctx.rotate(this.angle);
+                    ctx.fillStyle = "purple";
+                    
+                    const width = this.size * 0.75;
+                    const height = this.size;
+                    
+                    ctx.fillRect(-width / 2, -height / 2, height, width);
+                    
+                    ctx.restore();
+                }
+            }
+            class ShooterProjectile {
+                constructor(x, y, angle) {
+                    this.x = x;
+                    this.y = y;
+                    this.angle = angle;
+                    this.speed = 6;
+                    this.size = 3;
+                }
+                
+                update() {
+                    this.x += Math.cos(this.angle) * this.speed;
+                    this.y += Math.sin(this.angle) * this.speed;
+                }
+                
+                draw() {
+                    ctx.fillStyle = "magenta";
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            class ChunkyEnemy {
+                constructor() {
+                    const edge = Math.floor(Math.random() * 4);
+                    if (edge === 0) {
+                        this.x = Math.random() * canvas.width;
+                        this.y = -20;
+                    } else if (edge === 1) {
+                        this.x = Math.random() * canvas.width;
+                        this.y = canvas.height + 20;
+                    } else if (edge === 2) {
+                        this.x = -20;
+                        this.y = Math.random() * canvas.height;
+                    } else {
+                        this.x = canvas.width + 20;
+                        this.y = Math.random() * canvas.height;
+                    }
+                    this.health = 2
+                    this.size = Math.random() * 40 + 40;
+                    this.speed = 1 + score * 0.001 + Math.random() * 2;
+                }
+                update() {
+                    const dx = player.x - this.x;
+                    const dy = player.y - this.y;
+                    const dist = Math.hypot(dx, dy);
+                    this.x += (dx / dist) * this.speed;
+                    this.y += (dy / dist) * this.speed;
+                }
+                draw() {
+                    ctx.fillStyle = this.health === 2 ? "gray" : "#555"; // Darker if hit once
+                    ctx.fillRect(this.x - this.size / 2, this.y - this.size / 2, this.size, this.size);
+                }
+            }
+            
+            let player, bullets, enemies, shooterEnemies, shooterProjectiles, chunkyEnemies;
+            
+            function resetGame() {
+                player = new Player();
+                bullets = [];
+                enemies = [];
+                shooterEnemies = [];
+                shooterProjectiles = [];
+                chunkyEnemies = [];
+                score = 0;
+                health = 100;
+                gameOver = false;
+                updateHUD();
+                document.getElementById("gameOverScreen").style.display = "none";
+                spawnEnemy();
+                loop();
+            }
+            
+            function shootBullet() {
+                const angle = Math.atan2(mouseY - player.y, mouseX - player.x);
+                bullets.push(new Bullet(player.x, player.y, angle));
+            }
+            
+            const shooterSpawnChance = 0.2;
+            const chunkySpawnChance = 0.2;
+            const shooterSpawnScore = 350;
+            const chunkySpawnScore = 200;
+            
+            function spawnEnemy() {
+                if (!gameOver) {
+                    const roll = Math.random();
+                    
+                    if (score >= chunkySpawnScore && roll < chunkySpawnChance) {
+                        chunkyEnemies.push(new ChunkyEnemy());
+                    } else if (score >= shooterSpawnScore && roll < chunkySpawnChance + shooterSpawnChance) {
+                        shooterEnemies.push(new ShooterEnemy());
+                    } else {
+                        enemies.push(new Enemy());
+                    }
+                    
+                    setTimeout(spawnEnemy, 500);
+                }
+            }
+            
+            function updateHUD() {
+                document.getElementById("score").textContent = `Score: ${score}`;
+                document.getElementById("health").textContent = `Health: ${health}`;
+                
+                if (score > highScore) {
+                    highScore = score;
+                    localStorage.setItem('highScore', highScore);
+                    updateGlobalHighScore(score);
+                }
+                
+                document.getElementById("highScore").textContent = `High Score: ${highScore}`;
+            }
+            function flashHealthHUD() {
+                const healthElem = document.getElementById("health");
+                healthElem.style.color = "red";
+                setTimeout(() => {
+                    healthElem.style.color = "white";
+                }, 200);
+            }
+            
+            function checkCollisions() {
+                for (let i = enemies.length - 1; i >= 0; i--) {
+                    const e = enemies[i];
+                    
+                    // Enemy hits player
+                    const distToPlayer = Math.hypot(e.x - player.x, e.y - player.y);
+                    if (distToPlayer < e.size + player.size) {
+                        const baseDamage = 10;
+                        health -= e.size > 13 ? Math.abs(baseDamage - Math.round(e.size * 0.8)) : Math.abs(baseDamage - 6);
+                        damageFlashTimer = 10; shakeTime = 5; flashHealthHUD();
+                        enemies.splice(i, 1);
+                        if (health <= 0) {
+                            gameOver = true;
+                            document.getElementById("finalScore").textContent = score;
+                            document.getElementById("gameOverScreen").style.display = "block";
+                        }
+                        continue;
+                    }
+                    
+                    // Bullets hit enemy
+                    for (let j = bullets.length - 1; j >= 0; j--) {
+                        const b = bullets[j];
+                        const dist = Math.hypot(e.x - b.x, e.y - b.y);
+                        if (dist < e.size + b.size) {
+                            enemies.splice(i, 1);
+                            bullets.splice(j, 1);
+                            score += Math.round(8 / e.size) * 20 + Math.round(e.speed) + 4;
+                            break;
+                        }
+                    }
+                }
+                
+                // Shooter enemy collisions
+                for (let i = shooterEnemies.length - 1; i >= 0; i--) {
+                    const e = shooterEnemies[i];
+                    
+                    // Collision with player
+                    const distToPlayer = Math.hypot(e.x - player.x, e.y - player.y);
+                    if (distToPlayer < e.size + player.size) {
+                        health -= 20;
+                        damageFlashTimer = 10; shakeTime = 5; flashHealthHUD(); 
+                        shooterEnemies.splice(i, 1);
+                        if (health <= 0) {
+                            gameOver = true;
+                            document.getElementById("finalScore").textContent = score;
+                            document.getElementById("gameOverScreen").style.display = "block";
+                        }
+                        continue;
+                    }
+                    
+                    // Player bullet hits shooter enemy
+                    for (let j = bullets.length - 1; j >= 0; j--) {
+                        const b = bullets[j];
+                        const dist = Math.hypot(e.x - b.x, e.y - b.y);
+                        if (dist < e.size + b.size) {
+                            shooterEnemies.splice(i, 1);
+                            bullets.splice(j, 1);
+                            score += 20;
+                            break;
+                        }
+                    }
+                }
+                
+                // Shooter projectiles hit player
+                for (let i = shooterProjectiles.length - 1; i >= 0; i--) {
+                    const p = shooterProjectiles[i];
+                    const distToPlayer = Math.hypot(p.x - player.x, p.y - player.y);
+                    if (distToPlayer < p.size + player.size) {
+                        health -= 6;
+                        damageFlashTimer = 10;
+                        shooterProjectiles.splice(i, 1);
+                        if (health <= 0) {
+                            gameOver = true;
+                            document.getElementById("finalScore").textContent = score;
+                            document.getElementById("gameOverScreen").style.display = "block";
+                        }
+                        continue;
+                    }
+                    
+                    // Player bullet destroys shooter projectile
+                    for (let j = bullets.length - 1; j >= 0; j--) {
+                        const b = bullets[j];
+                        const dist = Math.hypot(p.x - b.x, p.y - b.y);
+                        if (dist < p.size + b.size) {
+                            shooterProjectiles.splice(i, 1);
+                            bullets.splice(j, 1);
+                            score += 5;
+                            break;
+                        }
+                    }
+                }
+                
+                // Chunky enemies collision
+                for (let i = chunkyEnemies.length - 1; i >= 0; i--) {
+                    const e = chunkyEnemies[i];
+                    
+                    // Enemy hits player
+                    const distToPlayer = Math.hypot(e.x - player.x, e.y - player.y);
+                    if (distToPlayer < e.size + player.size) {
+                        const baseDamage = e.health < 2 ? 20 : 25;
+                        health -= e.size > 13 ? Math.abs(baseDamage - Math.round(e.size * 0.8)) : Math.abs(baseDamage - 6);
+                        damageFlashTimer = 10; shakeTime = 5; flashHealthHUD(); 
+                        chunkyEnemies.splice(i, 1);
+                        if (health <= 0) {
+                            gameOver = true;
+                            document.getElementById("finalScore").textContent = score;
+                            document.getElementById("gameOverScreen").style.display = "block";
+                        }
+                        continue;
+                    }
+                    
+                    // Bullets hit enemy
+                    for (let j = bullets.length - 1; j >= 0; j--) {
+                        const b = bullets[j];
+                        const dist = Math.hypot(e.x - b.x, e.y - b.y);
+                        if (dist < e.size + b.size) {
+                            e.health--;
+                            if (e.health <= 0) {
+                                chunkyEnemies.splice(i, 1);
+                            }
+                            bullets.splice(j, 1);
+                            score += Math.round(8 / e.size) * 35 + Math.round(e.speed) + 4;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            function update() {
+                if (gameOver) return;
+                player.update();
+                bullets.forEach(b => b.update());
+                enemies.forEach(e => e.update());
+                shooterEnemies.forEach(e => e.update());
+                shooterProjectiles.forEach(p => p.update());
+                chunkyEnemies.forEach(e => e.update());
+                checkCollisions();
+                updateHUD();
+            }
+            
+            function draw() {
+                ctx.save();
+                
+                if (shakeTime > 0) {
+                    const dx = (Math.random() - 0.5) * shakeIntensity;
+                    const dy = (Math.random() - 0.5) * shakeIntensity;
+                    ctx.translate(dx, dy);
+                    shakeTime--;
+                }
+                
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                player.draw();
+                bullets.forEach(b => b.draw());
+                enemies.forEach(e => e.draw());
+                shooterEnemies.forEach(e => e.draw());
+                shooterProjectiles.forEach(p => p.draw());
+                chunkyEnemies.forEach(e => e.draw());
+                
+                ctx.restore();
+                
+                // Red flash overlay when taking damage
+                if (damageFlashTimer > 0) {
+                    ctx.fillStyle = "rgba(255, 0, 0, 0.2)";
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    damageFlashTimer--;
+                }
+            }
+            
+            function loop() {
+                if (gameOver) return;
+                update();
+                draw();
+                requestAnimationFrame(loop);
+            }
+            
+            // Start the game
+            document.getElementById("restartBtn").addEventListener("click", resetGame);
+            resetGame();
+        </script>
+    </body>
+</html>
+
